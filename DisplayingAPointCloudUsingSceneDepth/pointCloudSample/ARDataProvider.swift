@@ -110,7 +110,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
     private var cancellables = Set<AnyCancellable>()
     //private let semaphore = DispatchSemaphore(value: 0)
     
-    private let saveThreadCount = 5
+    private let saveThreadCount = 15
     private var convertThreadCount = 0
     private var arDataCacheQueue: [ARDataCache] = []
     
@@ -242,7 +242,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         
         //write Raw data info
         if let rgbtex = downscaledRGB.texture {
-            var metaURL = rgbRawFolderURL.appendingPathComponent("0.meta").appendingPathExtension("txt")
+            let metaURL = rgbRawFolderURL.appendingPathComponent("0.meta").appendingPathExtension("txt")
             do{
                 try "\(rgbtex.width)x\(rgbtex.height)x\(getPixelFormatBytes(pixelFormat: rgbtex.pixelFormat))".write(to:metaURL,atomically: true, encoding: .utf8)}
             catch{
@@ -251,7 +251,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         }
         
         if let depthtex = depthContent.texture {
-            var metaURL = depthRawFolderURL.appendingPathComponent("0.meta").appendingPathExtension("txt")
+            let metaURL = depthRawFolderURL.appendingPathComponent("0.meta").appendingPathExtension("txt")
             do{
                 try "\(depthtex.width)x\(depthtex.height)x\(getPixelFormatBytes(pixelFormat: depthtex.pixelFormat))".write(to:metaURL,atomically: true, encoding: .utf8)}
             catch{
@@ -260,7 +260,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         }
         
         if let confitex = confidenceContent.texture {
-            var metaURL = confidenceRawFolderURL.appendingPathComponent("0.meta").appendingPathExtension("txt")
+            let metaURL = confidenceRawFolderURL.appendingPathComponent("0.meta").appendingPathExtension("txt")
             do{
                 try "\(confitex.width)x\(confitex.height)x\(getPixelFormatBytes(pixelFormat: confitex.pixelFormat))".write(to:metaURL,atomically: true, encoding: .utf8)}
             catch{
@@ -485,19 +485,19 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         let rgbURL = rgbRawFolderURL.appendingPathComponent(filename).appendingPathExtension("bytes")
         if let rgbtex = loadTextureFromFile(device: metalDevice, fileURL: rgbURL, width: downscaledRGB.texture!.width, height: downscaledRGB.texture!.height, bytesPerPixel: getPixelFormatBytes(pixelFormat: downscaledRGB.texture!.pixelFormat), pixelFormatRawValue: downscaledRGB.texture!.pixelFormat.rawValue)
         {
-            saveTextureAsJPG(texture: rgbtex, pixelFormat: rgbtex.pixelFormat, directoryURL: rgbFolderURL, fileName: filename)
+            saveTextureAsJPG(texture: rgbtex, directoryURL: rgbFolderURL, fileName: filename)
         }
         
         let depthURL = depthRawFolderURL.appendingPathComponent(filename).appendingPathExtension("bytes")
         if let depthtex = loadTextureFromFile(device: metalDevice, fileURL: depthURL, width: depthContent.texture!.width, height: depthContent.texture!.height, bytesPerPixel: getPixelFormatBytes(pixelFormat: depthContent.texture!.pixelFormat), pixelFormatRawValue: depthContent.texture!.pixelFormat.rawValue)
         {
-            saveTextureAsJPG(texture: depthtex, pixelFormat: depthtex.pixelFormat, directoryURL: depthFolderURL, fileName: filename)
+            saveTextureAsJPG(texture: depthtex, directoryURL: depthFolderURL, fileName: filename)
         }
         
         let confiURL = confidenceRawFolderURL.appendingPathComponent(filename).appendingPathExtension("bytes")
         if let confitex = loadTextureFromFile(device: metalDevice, fileURL: confiURL, width: confidenceContent.texture!.width, height: confidenceContent.texture!.height, bytesPerPixel: getPixelFormatBytes(pixelFormat: confidenceContent.texture!.pixelFormat), pixelFormatRawValue: confidenceContent.texture!.pixelFormat.rawValue)
         {
-            saveTextureAsJPG(texture: confitex, pixelFormat: confitex.pixelFormat, directoryURL: confidenceFolderURL, fileName: filename)
+            saveTextureAsJPG(texture: confitex, directoryURL: confidenceFolderURL, fileName: filename)
         }
         
         
@@ -654,21 +654,14 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         return [UInt8(res[0] * 255), UInt8(res[1] * 255), UInt8(res[2] * 255)]
     }
     
-    func imageFromTexture(texture: MTLTexture, pixelFormat: MTLPixelFormat) -> UIImage? {
+    func imageFromTexture(texture: MTLTexture) -> UIImage? {
         let width = texture.width
         let height = texture.height
         var imageBytes: [UInt8]
         var bytesPerPixel: Int
         var convertedBytes: [UInt8]
-        
+        let pixelFormat = texture.pixelFormat
         switch pixelFormat {
-        case .rgba8Unorm:
-            bytesPerPixel = 4
-            let imageByteCount = width * height * bytesPerPixel
-            imageBytes = [UInt8](repeating: 0, count: imageByteCount)
-            let region = MTLRegionMake2D(0, 0, width, height)
-            texture.getBytes(&imageBytes, bytesPerRow: width * bytesPerPixel, from: region, mipmapLevel: 0)
-            convertedBytes = imageBytes
         case .rgba32Float:
             bytesPerPixel = 16
             let imageByteCount = width * height * bytesPerPixel
@@ -761,6 +754,11 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         }
         return nil
     }
+    
+    func imageFromTextureByGPU(texture: MTLTexture) -> UIImage?{
+        let imageprocessor = ImageFromTexture(device: metalDevice)
+        return imageprocessor.image(from: texture, pixelFormat: texture.pixelFormat)
+    }
 
     func saveImageAsJPG(image: UIImage, fileURL: URL) -> Bool {
         return autoreleasepool{
@@ -800,9 +798,9 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         return context.makeImage()!
     }
     
-    func saveTextureAsJPG(texture: MTLTexture, pixelFormat: MTLPixelFormat, directoryURL: URL, fileName: String) {
+    func saveTextureAsJPG(texture: MTLTexture, directoryURL: URL, fileName: String) {
 
-            if let image = self.imageFromTexture(texture: texture, pixelFormat: pixelFormat) {
+            if let image = self.imageFromTextureByGPU(texture: texture) {
                 let fileURL = directoryURL.appendingPathComponent(fileName).appendingPathExtension("jpg")
                 if self.saveImageAsJPG(image: image, fileURL: fileURL) {
                     print("Image saved successfully at \(fileURL)")

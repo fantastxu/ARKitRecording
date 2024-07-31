@@ -22,54 +22,6 @@ typedef struct
     float2 texCoord;
 } ColorInOut;
 
-struct SVertex {
-    float4 position [[position]];
-    float2 texCoord;
-};
-
-vertex SVertex passThroughVertexShader(uint vertexID [[vertex_id]]) {
-
-    
-    float4 positions[6] = {
-        float4(-1.0, -1.0, 0.0, 1.0),  // Bottom-left
-        float4( 1.0, -1.0, 0.0, 1.0),  // Bottom-right
-        float4(-1.0,  1.0, 0.0, 1.0),  // Top-left
-        float4(-1.0,  1.0, 0.0, 1.0),  // Top-left
-        float4( 1.0, -1.0, 0.0, 1.0),  // Bottom-right
-        float4( 1.0,  1.0, 0.0, 1.0)   // Top-right
-    };
-    
-    float2 texCoords[6] = {
-        float2(1.0, 1.0),
-        float2(0.0, 1.0),
-        float2(1.0, 0.0),
-        float2(1.0, 0.0),
-        float2(0.0, 1.0),
-        float2(0.0, 0.0)
-    };
-    
-    
-    float4x4 rotationMatrix = float4x4(
-        float4(0.0, -1.0, 0.0, 0.0),
-        float4(1.0,  0.0, 0.0, 0.0),
-        float4(0.0,  0.0, 1.0, 0.0),
-        float4(0.0,  0.0, 0.0, 1.0)
-    );
-    
-    float4 position = positions[vertexID];
-    float4 rotatedPosition = float4(
-        position.x * rotationMatrix[0].x + position.y * rotationMatrix[1].x + position.z * rotationMatrix[2].x + position.w * rotationMatrix[3].x,
-        position.x * rotationMatrix[0].y + position.y * rotationMatrix[1].y + position.z * rotationMatrix[2].y + position.w * rotationMatrix[3].y,
-        position.x * rotationMatrix[0].z + position.y * rotationMatrix[1].z + position.z * rotationMatrix[2].z + position.w * rotationMatrix[3].z,
-        position.x * rotationMatrix[0].w + position.y * rotationMatrix[1].w + position.z * rotationMatrix[2].w + position.w * rotationMatrix[3].w
-    );
-
-    SVertex outVertex;
-    outVertex.position = rotatedPosition;//positions[vertexID];
-    outVertex.texCoord = texCoords[vertexID];
-    return outVertex;
-}
-
 
 
 // Display a 2D texture.
