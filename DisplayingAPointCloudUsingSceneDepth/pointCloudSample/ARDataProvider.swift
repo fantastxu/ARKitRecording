@@ -104,15 +104,19 @@ final class ARProvider: ObservableObject,ARDataReceiver {
     
     public var fps: Float = 10 {didSet{}}
     private let processingQueue = DispatchQueue(label: "processingQueue", qos: .userInitiated, attributes: .concurrent)
-    private let queueSync = DispatchQueue(label: "com.example.arDataCacheQueueSync",qos: .userInitiated, attributes:
-            .concurrent)
+    private let queueSync = DispatchQueue(label: "arDataCacheQueueSync",qos: .userInitiated, attributes: .concurrent)
+    private let convertQueueSync = DispatchQueue(label: "arDataConvertQueueSync",qos: .userInitiated, attributes: .concurrent)
+    private let convertingQueue = DispatchQueue(label: "convertingQueue", qos: .userInitiated, attributes: .concurrent)
     private var cancellables = Set<AnyCancellable>()
     //private let semaphore = DispatchSemaphore(value: 0)
-    private let threadCount = 5
-    var activeThreads = 0
     
-    // 创建一个 ARDataCache 队列
-    @Published public var arDataCacheQueue: [ARDataCache] = []
+    private let saveThreadCount = 5
+    private var convertThreadCount = 0
+    private var arDataCacheQueue: [ARDataCache] = []
+    
+    var saveActiveThreads = 0
+    @Published public var convertActiveThreaqds = 0
+    @Published public var arDataConvertQueue: [String] = []
     
     var textureCache: CVMetalTextureCache?
     let metalDevice: MTLDevice
@@ -127,6 +131,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
     var confidenceFolderURL : URL
     var confidenceRawFolderURL : URL
     var rgbFolderURL : URL
+    var rgbRawFolderURL : URL
     var intrinsicsFolderURL : URL
     
     
@@ -169,6 +174,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         confidenceFolderURL = mainFolderURL.appendingPathComponent("confidence")
         confidenceRawFolderURL = mainFolderURL.appendingPathComponent("confidence_RAW")
         rgbFolderURL = mainFolderURL.appendingPathComponent("rgb")
+        rgbRawFolderURL = mainFolderURL.appendingPathComponent("rgb_RAW")
         intrinsicsFolderURL = mainFolderURL.appendingPathComponent("intrinsics")
 
         do {
@@ -184,6 +190,13 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         } catch {
             print("Error creating RGB directory: \(error)")
         }
+        
+        do {
+            try fileManager.createDirectory(at: rgbRawFolderURL, withIntermediateDirectories: true, attributes: nil)
+            print("RGB_Raw directory created at \(rgbRawFolderURL.path)")
+        } catch {
+            print("Error creating RGB_Raw directory: \(error)")
+        }
 
         do {
             try fileManager.createDirectory(at: depthFolderURL, withIntermediateDirectories: true, attributes: nil)
@@ -194,9 +207,9 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         
         do {
             try fileManager.createDirectory(at: depthRawFolderURL, withIntermediateDirectories: true, attributes: nil)
-            print("Depth directory created at \(depthRawFolderURL.path)")
+            print("Depth_Raw directory created at \(depthRawFolderURL.path)")
         } catch {
-            print("Error creating Depth directory: \(error)")
+            print("Error creating Depth_Raw directory: \(error)")
         }
 
         do {
@@ -215,9 +228,9 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         
         do {
             try fileManager.createDirectory(at: confidenceRawFolderURL, withIntermediateDirectories: true, attributes: nil)
-            print("Confidence directory created at \(confidenceRawFolderURL.path)")
+            print("Confidence_Raw directory created at \(confidenceRawFolderURL.path)")
         } catch {
-            print("Error creating Confidence directory: \(error)")
+            print("Error creating Confidence_Raw directory: \(error)")
         }
         
         do {
@@ -226,12 +239,58 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         } catch {
             print("Error creating Intrinsics directory: \(error)")
         }
+        
+        //write Raw data info
+        if let rgbtex = downscaledRGB.texture {
+            var metaURL = rgbRawFolderURL.appendingPathComponent("0.meta").appendingPathExtension("txt")
+            do{
+                try "\(rgbtex.width)x\(rgbtex.height)x\(getPixelFormatBytes(pixelFormat: rgbtex.pixelFormat))".write(to:metaURL,atomically: true, encoding: .utf8)}
+            catch{
+                print("Write rgb texture meta info error!")
+            }
+        }
+        
+        if let depthtex = depthContent.texture {
+            var metaURL = depthRawFolderURL.appendingPathComponent("0.meta").appendingPathExtension("txt")
+            do{
+                try "\(depthtex.width)x\(depthtex.height)x\(getPixelFormatBytes(pixelFormat: depthtex.pixelFormat))".write(to:metaURL,atomically: true, encoding: .utf8)}
+            catch{
+                print("Write depth texture meta info error!")
+            }
+        }
+        
+        if let confitex = confidenceContent.texture {
+            var metaURL = confidenceRawFolderURL.appendingPathComponent("0.meta").appendingPathExtension("txt")
+            do{
+                try "\(confitex.width)x\(confitex.height)x\(getPixelFormatBytes(pixelFormat: confitex.pixelFormat))".write(to:metaURL,atomically: true, encoding: .utf8)}
+            catch{
+                print("Write confidence texture meta info error!")
+            }
+        }
 
         recordStartTime = 0.0
+        convertThreadCount = 0
     }
     
     func stop(){
         recordStartTime = -1.0
+        convertThreadCount = 5
+    }
+    
+    func getPixelFormatBytes(pixelFormat:MTLPixelFormat) -> Int {
+        switch pixelFormat {
+        case .rgba8Unorm, .bgra8Unorm:
+            return 4
+        case .r8Unorm:
+            return 1
+        case .r32Float:
+            return 4
+        case .rgba32Float:
+            return 16
+        // 添加其他支持的像素格式
+        default:
+            return 0
+        }
     }
     
     // Initialize the MPS filters, metal pipeline, and Metal textures.
@@ -271,6 +330,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
             depthRawFolderURL = rgbFolderURL
             confidenceRawFolderURL = rgbFolderURL
             intrinsicsFolderURL = rgbFolderURL
+            rgbRawFolderURL = rgbFolderURL
             // Set the delegate for ARKit callbacks.
             
             
@@ -293,6 +353,20 @@ final class ARProvider: ObservableObject,ARDataReceiver {
                 self.processCache()
             }
                 
+        }
+        
+        convertQueueSync.async {
+            if(self.arDataConvertQueue.count > 0 && self.convertActiveThreaqds < self.convertThreadCount)
+            {
+                guard let filename = self.arDataConvertQueue.first else {
+                    return
+                }
+                
+                self.arDataConvertQueue.removeFirst()
+                self.convertActiveThreaqds += 1
+                self.convertData(filename: filename)
+                    
+            }
         }
         
     }
@@ -390,11 +464,87 @@ final class ARProvider: ObservableObject,ARDataReceiver {
     
     func processCache() {
         processingQueue.async {
-            if(self.activeThreads < self.threadCount) {
-                self.activeThreads += 1
-                print("=========>activeThreads:\(self.activeThreads)")
+            if(self.saveActiveThreads < self.saveThreadCount) {
+                self.saveActiveThreads += 1
+                print("=========>saveActiveThreads:\(self.saveActiveThreads)")
                 self.processFromQueue()
             }
+        }
+    }
+    
+    func convertData(filename:String)
+    {
+        convertingQueue.async {
+            self.processFromFile(filename: filename)
+        }
+        
+    }
+    
+    func processFromFile(filename:String)
+    {
+        let rgbURL = rgbRawFolderURL.appendingPathComponent(filename).appendingPathExtension("bytes")
+        if let rgbtex = loadTextureFromFile(device: metalDevice, fileURL: rgbURL, width: downscaledRGB.texture!.width, height: downscaledRGB.texture!.height, bytesPerPixel: getPixelFormatBytes(pixelFormat: downscaledRGB.texture!.pixelFormat), pixelFormatRawValue: downscaledRGB.texture!.pixelFormat.rawValue)
+        {
+            saveTextureAsJPG(texture: rgbtex, pixelFormat: rgbtex.pixelFormat, directoryURL: rgbFolderURL, fileName: filename)
+        }
+        
+        let depthURL = depthRawFolderURL.appendingPathComponent(filename).appendingPathExtension("bytes")
+        if let depthtex = loadTextureFromFile(device: metalDevice, fileURL: depthURL, width: depthContent.texture!.width, height: depthContent.texture!.height, bytesPerPixel: getPixelFormatBytes(pixelFormat: depthContent.texture!.pixelFormat), pixelFormatRawValue: depthContent.texture!.pixelFormat.rawValue)
+        {
+            saveTextureAsJPG(texture: depthtex, pixelFormat: depthtex.pixelFormat, directoryURL: depthFolderURL, fileName: filename)
+        }
+        
+        let confiURL = confidenceRawFolderURL.appendingPathComponent(filename).appendingPathExtension("bytes")
+        if let confitex = loadTextureFromFile(device: metalDevice, fileURL: confiURL, width: confidenceContent.texture!.width, height: confidenceContent.texture!.height, bytesPerPixel: getPixelFormatBytes(pixelFormat: confidenceContent.texture!.pixelFormat), pixelFormatRawValue: confidenceContent.texture!.pixelFormat.rawValue)
+        {
+            saveTextureAsJPG(texture: confitex, pixelFormat: confitex.pixelFormat, directoryURL: confidenceFolderURL, fileName: filename)
+        }
+        
+        
+        convertQueueSync.async(flags:.barrier) {
+            self.convertActiveThreaqds -= 1
+        }
+    }
+    
+    func loadTextureFromFile(device: MTLDevice, fileURL: URL, width: Int, height: Int, bytesPerPixel: Int, pixelFormatRawValue: UInt) -> MTLTexture? {
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let buffer = [UInt8](data)
+            
+            guard let pixelFormat = MTLPixelFormat(rawValue: pixelFormatRawValue) else {
+                print("Invalid file name format")
+                return nil
+            }
+            
+            // 创建纹理描述符
+            let textureDescriptor = MTLTextureDescriptor()
+            textureDescriptor.pixelFormat = pixelFormat
+            textureDescriptor.width = width
+            textureDescriptor.height = height
+            textureDescriptor.usage = .shaderRead
+            
+            // 创建纹理
+            guard let texture = device.makeTexture(descriptor: textureDescriptor) else {
+                print("Failed to create texture")
+                return nil
+            }
+            
+            
+            let bytesPerRow = bytesPerPixel * width
+            
+            // 将数据拷贝到纹理
+            buffer.withUnsafeBytes { ptr in
+                texture.replace(region: MTLRegionMake2D(0, 0, width, height),
+                                mipmapLevel: 0,
+                                withBytes: ptr.baseAddress!,
+                                bytesPerRow: bytesPerRow)
+            }
+            
+            return texture
+            
+        } catch {
+            print("Failed to load texture from file: \(error)")
+            return nil
         }
     }
     
@@ -413,41 +563,45 @@ final class ARProvider: ObservableObject,ARDataReceiver {
             }
             
             if let cache = cacheToProcess {
-                // 在这里处理 ARDataCache 对象
+                // Save raw data to files first
                 print("Processing ARDataCache with timestamp: \(String(describing: cache.timeStamp))")
-                let filename = cache.timeStamp
+                let filename = String(format: "%.9f",cache.timeStamp!)
                 
                 if(cache.rgbTexture != nil)
                 {
-                    //self.saveTextureAsJPG(texture: cache.rgbTexture!, pixelFormat: .rgba32Float, directoryURL: self.rgbFolderURL, fileName: String(format: "%.9f", filename!))
-                    self.saveTextureToFile(texture: cache.rgbTexture!, directoryURL: self.rgbFolderURL, fileName: String(format: "%.9f", filename!))
+                    //self.saveTextureAsJPG(texture: cache.rgbTexture!, pixelFormat: .rgba32Float, directoryURL: self.rgbFolderURL, fileName: filename)
+                    self.saveTextureToFile(texture: cache.rgbTexture!, directoryURL: self.rgbRawFolderURL, fileName: filename)
                 }
 
                 
                 if(cache.depthTexture != nil)
                 {
-                    //self.saveTextureAsJPG(texture: cache.depthTexture!, pixelFormat: .r32Float, directoryURL: self.depthFolderURL, fileName: String(format: "%.9f", filename!))
+                    //self.saveTextureAsJPG(texture: cache.depthTexture!, pixelFormat: .r32Float, directoryURL: self.depthFolderURL, fileName: filename)
                     
-                    self.saveTextureToFile(texture: cache.depthTexture!, directoryURL: self.depthRawFolderURL, fileName: String(format: "%.9f", filename!))
+                    self.saveTextureToFile(texture: cache.depthTexture!, directoryURL: self.depthRawFolderURL, fileName: filename)
                 }
 
                 
                 if(cache.confiTexture != nil)
                 {
-                    //self.saveTextureAsJPG(texture: cache.confiTexture!, pixelFormat: .r8Unorm, directoryURL: self.confidenceFolderURL, fileName: String(format: "%.9f", filename!))
+                    //self.saveTextureAsJPG(texture: cache.confiTexture!, pixelFormat: .r8Unorm, directoryURL: self.confidenceFolderURL, fileName: filename)
                     
-                    self.saveTextureToFile(texture: cache.confiTexture!, directoryURL: self.confidenceRawFolderURL, fileName: String(format: "%.9f", filename!))
+                    self.saveTextureToFile(texture: cache.confiTexture!, directoryURL: self.confidenceRawFolderURL, fileName: filename)
                 }
 
                 
-                self.saveMatrixToFile(matrix: cache.transform!, directoryURL: self.poseFolderURL, fileName: String(format: "%.9f", filename!))
+                self.saveMatrixToFile(matrix: cache.transform!, directoryURL: self.poseFolderURL, fileName: filename)
                 
-                self.saveMatrixToFile(matrix: cache.intrinsics!, directoryURL: self.intrinsicsFolderURL, fileName: String(format: "%.9f", filename!))
+                self.saveMatrixToFile(matrix: cache.intrinsics!, directoryURL: self.intrinsicsFolderURL, fileName: filename)
 
                 cache.confiTexture = nil
                 cache.depthTexture = nil
                 cache.rgbTexture = nil
                 
+                //add filename to
+                convertQueueSync.sync{
+                    arDataConvertQueue.append(filename)
+                }
                             
             }
             else{
@@ -456,8 +610,8 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         }
         
         processingQueue.async(flags: .barrier){
-            self.activeThreads -= 1
-            print("=========>activeThreads:\(self.activeThreads)")
+            self.saveActiveThreads -= 1
+            print("=========>saveActiveThreads:\(self.saveActiveThreads)")
         }
 
     }
@@ -685,26 +839,13 @@ final class ARProvider: ObservableObject,ARDataReceiver {
             let pixelFormat = texture.pixelFormat
 
             // 计算每行字节数
-            let bytesPerPixel: Int
-            switch pixelFormat {
-            case .rgba8Unorm:
-                bytesPerPixel = 4
-            case .bgra8Unorm:
-                bytesPerPixel = 4
-            case .r8Unorm:
-                bytesPerPixel = 1
-            case .r32Float:
-                bytesPerPixel = 4
-            case .rgba32Float:
-                bytesPerPixel = 16
-            // 添加其他支持的像素格式
-            default:
-                fatalError("Unsupported pixel format: \(pixelFormat.rawValue)")
-            }
+            let bytesPerPixel = getPixelFormatBytes(pixelFormat: pixelFormat)
 
             let bytesPerRow = bytesPerPixel * width
             let bufferSize = bytesPerRow * height
             let fileURL = directoryURL.appendingPathComponent(fileName).appendingPathExtension("bytes")
+            
+            
             // 创建一个缓冲区来存储纹理数据
             var buffer = [UInt8](repeating: 0, count: bufferSize)
 

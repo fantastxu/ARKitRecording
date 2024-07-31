@@ -145,9 +145,9 @@ struct MetalDepthView: View {
                                         isRecording ? arProvider.record() : arProvider.stop()
                                     }) {
                                         Image(systemName: isRecording ? "stop.circle" : "record.circle").resizable().frame(width: 30, height: 30)
-                                    }.disabled(!isRecording && arProvider.arDataCacheQueue.count>0)
+                                    }.disabled(!isRecording && (arProvider.arDataConvertQueue.count>0 || arProvider.convertActiveThreaqds > 0))
                                     Spacer()
-                                    Text("\(arProvider.arDataCacheQueue.count)")
+                                    Text("\(arProvider.arDataConvertQueue.count)")
                                 }.padding(.horizontal)
                                 
                                 
