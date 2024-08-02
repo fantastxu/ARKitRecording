@@ -71,6 +71,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
     let arReceiver = ARReceiver()
     var lastArData: ARData?
     let depthContent = MetalTextureContent()
+    let depthOriginContent = MetalTextureContent()
     let confidenceContent = MetalTextureContent()
     let colorYContent = MetalTextureContent()
     let colorCbCrContent = MetalTextureContent()
@@ -250,7 +251,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
             }
         }
         
-        if let depthtex = depthContent.texture {
+        if let depthtex = depthOriginContent.texture {
             let metaURL = depthRawFolderURL.appendingPathComponent("0.meta").appendingPathExtension("txt")
             do{
                 try "\(depthtex.width)x\(depthtex.height)x\(getPixelFormatBytes(pixelFormat: depthtex.pixelFormat))".write(to:metaURL,atomically: true, encoding: .utf8)}
@@ -379,9 +380,11 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         if isUseSmoothedDepthForUpsampling {
             depthContent.texture = lastArData?.depthSmoothImage?.texture(withFormat: .r32Float, planeIndex: 0, addToCache: textureCache!)!
             confidenceContent.texture = lastArData?.confidenceSmoothImage?.texture(withFormat: .r8Unorm, planeIndex: 0, addToCache: textureCache!)!
+            depthOriginContent.texture = lastArData?.depthSmoothImage?.texture(withFormat: .r32Float, planeIndex: 0, addToCache: textureCache!)!
         } else {
             depthContent.texture = lastArData?.depthImage?.texture(withFormat: .r32Float, planeIndex: 0, addToCache: textureCache!)!
             confidenceContent.texture = lastArData?.confidenceImage?.texture(withFormat: .r8Unorm, planeIndex: 0, addToCache: textureCache!)!
+            depthOriginContent.texture = lastArData?.depthImage?.texture(withFormat: .r32Float, planeIndex: 0, addToCache: textureCache!)!
         }
         if isToUpsampleDepth {
             guard let cmdBuffer = commandQueue.makeCommandBuffer() else { return }
@@ -427,7 +430,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
                 {
                     let newcache = ARDataCache()
                     copyTextureCommand(sourceTexture: &newcache.rgbTexture, destTexture: downscaledRGB.texture!, cmdBuffer: cmdBuffer)
-                    copyTextureCommand(sourceTexture: &newcache.depthTexture, destTexture: destDepthTexture, cmdBuffer: cmdBuffer)
+                    copyTextureCommand(sourceTexture: &newcache.depthTexture, destTexture: depthOriginContent.texture!, cmdBuffer: cmdBuffer)
                     copyTextureCommand(sourceTexture: &newcache.confiTexture, destTexture: confidenceContent.texture!, cmdBuffer: cmdBuffer)
                     
                     newcache.transform = lastArData!.cameraTransform
@@ -489,7 +492,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
         }
         
         let depthURL = depthRawFolderURL.appendingPathComponent(filename).appendingPathExtension("bytes")
-        if let depthtex = loadTextureFromFile(device: metalDevice, fileURL: depthURL, width: depthContent.texture!.width, height: depthContent.texture!.height, bytesPerPixel: getPixelFormatBytes(pixelFormat: depthContent.texture!.pixelFormat), pixelFormatRawValue: depthContent.texture!.pixelFormat.rawValue)
+        if let depthtex = loadTextureFromFile(device: metalDevice, fileURL: depthURL, width: depthOriginContent.texture!.width, height: depthOriginContent.texture!.height, bytesPerPixel: getPixelFormatBytes(pixelFormat: depthOriginContent.texture!.pixelFormat), pixelFormatRawValue: depthOriginContent.texture!.pixelFormat.rawValue)
         {
             saveTextureAsJPG(texture: depthtex, directoryURL: depthFolderURL, fileName: filename)
         }
