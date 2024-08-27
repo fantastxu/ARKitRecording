@@ -356,6 +356,27 @@ final class ARProvider: ObservableObject,ARDataReceiver {
                 
         }
         
+        
+        if(recordStartTime == -1 && saveActiveThreads <= 0 && self.convertThreadCount > 0)
+        {
+            
+            convertQueueSync.async(flags:.barrier){
+                var filenameProcess:String?
+                if !self.arDataConvertQueue.isEmpty {
+                    if(self.convertActiveThreaqds < self.convertThreadCount){
+                        filenameProcess = self.arDataConvertQueue.removeFirst()
+                        if let filename = filenameProcess {
+                            self.convertActiveThreaqds += 1
+                            self.convertData(filename: filename)
+                        }
+                    }
+                }
+            }
+            
+
+        }
+        
+        /*
         convertQueueSync.async {
             if(self.arDataConvertQueue.count > 0 && self.convertActiveThreaqds < self.convertThreadCount)
             {
@@ -369,6 +390,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
                     
             }
         }
+         */
         
     }
     
@@ -602,7 +624,7 @@ final class ARProvider: ObservableObject,ARDataReceiver {
                 cache.rgbTexture = nil
                 
                 //add filename to
-                convertQueueSync.sync{
+                convertQueueSync.sync(flags:.barrier){
                     arDataConvertQueue.append(filename)
                 }
                             
